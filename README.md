@@ -3,15 +3,21 @@ GPU 1D Ising simulation
 
 Try to put the repo inside CUDA samples folder like:
 ```
-/Developer/NVIDIA/CUDA-5.0/samples/0_Simple/gpuising
+nvcc gpuising.cu -arch=sm_20
+```
+Run with:
+```
+./a.out
 ```
 
-Then it is a matter of using ```make```
-```
-make
-```
 
-... and running:
+You can also try to run test file with
 ```
-./gpuising
+nvcc curand.cu -arch=sm_20
 ```
+Run with:
+```
+./a.out
+```
+Which should produce a list of random numbers.
+Note that your GPGPU should be cuRAND compatible and accept pritf's from kernel code.
