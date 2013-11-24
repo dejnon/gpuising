@@ -21,7 +21,7 @@
 __global__ void generate_kernel(curandStateMtgp32 *state)
 {
     for(int i = 0; i < 1000; i++) {
-        printf("%f, ", curand_normal(&state[blockIdx.x]));
+        printf("%f, ", curand_uniform(&state[blockIdx.x]));
     }
 }
  
