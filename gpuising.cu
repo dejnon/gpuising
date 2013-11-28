@@ -1,54 +1,105 @@
-#include "stdio.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <cuda.h>
-#include <cuda_runtime.h>
+#include <curand_kernel.h>
+/* include MTGP host helper functions */
+#include <curand_mtgp32_host.h>
+/* include MTGP pre-computed parameter sets */
+#include <curand_mtgp32dc_p_11213.h>
 
-#define N 3
 
-__global__ void add(int *a, int *b, int *c) {
- c[threadIdx.x] = a[threadIdx.x] + b[threadIdx.x];
- }
+#define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
+    printf("Error at %s:%d\n",__FILE__,__LINE__); \
+    return EXIT_FAILURE;}} while(0)
 
-void arr_print(int *a) {
-  for (int i = 0; i < N; i++) {
-    printf("%d ", a[i]);
-  }
-  printf("\n");
+#define CURAND_CALL(x) do { if((x) != CURAND_STATUS_SUCCESS) { \
+    printf("Error at %s:%d\n",__FILE__,__LINE__); \
+    return EXIT_FAILURE;}} while(0)
+
+
+#define SPIN_UP 0
+#define SPIN_DOWN 1
+
+#define FLIP_SPIN(s) ((s) == (0) ? (1) : (0))
+
+#define LATICE_SIZE 51
+#define W0 0.5
+#define C 0.5
+
+template <class T> void swap ( T& a, T& b )
+{
+  T c(a); a=b; b=c;
 }
 
-int main(void) {
- int *a, *b, *c; // host copies of a, b, c
- int *d_a, *d_b, *d_c; // device copies of a, b, c
- int size = sizeof(int) * N;
+__global__ void generate_kernel(curandStateMtgp32 *state)
+{
+    short * LATICE           = (short *)malloc(LATICE_SIZE*sizeof(short));
+    short * NEXT_STEP_LATICE = (short *)malloc(LATICE_SIZE*sizeof(short));
+    short * swap = NULL;
 
- // Allocate space for device copies of a, b, c
- cudaMalloc((void **)&d_a, size);
- cudaMalloc((void **)&d_b, size);
- cudaMalloc((void **)&d_c, size);
+    for (int i = 0; i < LATICE_SIZE; i++) {
+        LATICE[i] = (i&1);
+    }
 
- // Setup input values
-a = (int *)malloc(size);
-a[0] = 1; a[1] = 2; a[2] = 3;
-b = (int *)malloc(size);
-b[0] = 2; b[1] = 2; b[2] = 2;
-c = (int *)malloc(size);
+    for (int t = 0; t < 1000; t++) {
+        // bondDensity(LATICE)
+        // miu, sigma via blockId or parameter?
+        int first_i = (int)(LATICE_SIZE * curand_uniform(&state[blockIdx.x]));
+        int last_i = (int)(first_i + (C * LATICE_SIZE));
 
-// Copy inputs to device
- cudaMemcpy(d_a, a, size, cudaMemcpyHostToDevice);
- cudaMemcpy(d_b, b, size, cudaMemcpyHostToDevice);
+        for (int i = 0; i < LATICE_SIZE; i++) {
+            if (first_i <= i && i <= last_i) {
+                int left  = (i-1) % LATICE_SIZE;
+                int right = (i+1) % LATICE_SIZE;
+                if ( LATICE[left] == LATICE[right] ) {
+                    NEXT_STEP_LATICE[i] = LATICE[left];
+                    // montecarlosteps++
+                } else if ( W0 > curand_uniform(&state[blockIdx.x]) ) {
+                    NEXT_STEP_LATICE[i] = FLIP_SPIN(LATICE[i]); 
+                    // montecarlosteps++
+                } // else flag for is_complete?
+            } else {
+                NEXT_STEP_LATICE[i] = LATICE[i];
+            }
+        }
+        printf("[");
+        for (int i = 0; i < LATICE_SIZE; i++) {
+            if (i!=0){
+                printf(",%d", NEXT_STEP_LATICE[i]);
+            } else {
+                printf("%d", NEXT_STEP_LATICE[i]);
+            }
+        }
+        printf("]\n"); 
+        swap = LATICE;
+        LATICE = NEXT_STEP_LATICE;
+        NEXT_STEP_LATICE = swap;
+    }
+}
 
-arr_print(a);
-arr_print(b);
-arr_print(c);
+int main(int argc, char *argv[])
+{
+    curandStateMtgp32 *devMTGPStates;
+    mtgp32_kernel_params *devKernelParams;
 
- // Launch add() kernel on GPU
- add<<<1,N>>>(d_a, d_b, d_c);
+    /* Allocate space for prng states on device */
+    CUDA_CALL(cudaMalloc((void **)&devMTGPStates, 64 * sizeof(curandStateMtgp32)));
 
- // Copy result back to host
- cudaMemcpy(c, d_c, size, cudaMemcpyDeviceToHost);
- // Cleanup
-arr_print(c);
+    /* Setup MTGP prng states */
 
-free(a); free(b); free(c);
-cudaFree(d_a); cudaFree(d_b); cudaFree(d_c);
- return 0;
- }
+    /* Allocate space for MTGP kernel parameters */
+    CUDA_CALL(cudaMalloc((void**)&devKernelParams, sizeof(mtgp32_kernel_params)));
+
+    /* Reformat from predefined parameter sets to kernel format, */
+    /* and copy kernel parameters to device memory               */
+    CURAND_CALL(curandMakeMTGP32Constants(mtgp32dc_params_fast_11213,devKernelParams));
+
+    /* Initialize one state per thread block */
+    CURAND_CALL(curandMakeMTGP32KernelState(devMTGPStates,mtgp32dc_params_fast_11213, devKernelParams, 64, 1234));
+
+    generate_kernel<<<1, 1>>>(devMTGPStates);
+
+    /* Cleanup */
+    CUDA_CALL(cudaFree(devMTGPStates));
+    return EXIT_SUCCESS;
+}
