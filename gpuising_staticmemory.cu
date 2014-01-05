@@ -30,27 +30,20 @@
 #define FLIP_SPIN(s) ((s) == (0) ? (1) : (0))
 
 #define LATICE_SIZE 60
-#define MAX_MCS     1000
+#define MAX_MCS     10000000
 #define MAX_RNG_STATES 200
-
-#define STEP_SIZE   0.1
 
 #define W0_START    0.0
 #define W0_END      1.0
-#define W0_SIZE     (int)(((W0_END-W0_START)/STEP_SIZE)+1)
+#define W0_SIZE     10
 
 #define MIU_START   0.0
 #define MIU_END     1.0
-#define MIU_SIZE    (int)(((MIU_END-MIU_START)/STEP_SIZE)+1)
+#define MIU_SIZE    20
 
 #define SIGMA_START 0.0
 #define SIGMA_END   1.0
-#define SIGMA_SIZE  (int)(((SIGMA_END-SIGMA_START)/STEP_SIZE)+1)
-
-
-// #define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
-//     printf("Error at %s:%d\n",__FILE__,__LINE__); \
-//     return EXIT_FAILURE;}} while(0)
+#define SIGMA_SIZE  20
 
 #define CUDA_CALL(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
@@ -61,9 +54,31 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
    }
 }
 
-#define CURAND_CALL(x) do { if((x) != CURAND_STATUS_SUCCESS) { \
-    printf("Error at %s:%d\n",__FILE__,__LINE__); \
-    return EXIT_FAILURE;}} while(0)
+#define CURAND_CALL(ans) { curandAssert((ans), __FILE__, __LINE__); }
+const char* curandGetErrorString(curandStatus_t status) {
+    switch(status) {
+        case CURAND_STATUS_SUCCESS: return "CURAND_STATUS_SUCCESS";
+        case CURAND_STATUS_VERSION_MISMATCH: return "CURAND_STATUS_VERSION_MISMATCH";
+        case CURAND_STATUS_NOT_INITIALIZED: return "CURAND_STATUS_NOT_INITIALIZED";
+        case CURAND_STATUS_ALLOCATION_FAILED: return "CURAND_STATUS_ALLOCATION_FAILED";
+        case CURAND_STATUS_TYPE_ERROR: return "CURAND_STATUS_TYPE_ERROR";
+        case CURAND_STATUS_OUT_OF_RANGE: return "CURAND_STATUS_OUT_OF_RANGE";
+        case CURAND_STATUS_LENGTH_NOT_MULTIPLE: return "CURAND_STATUS_LENGTH_NOT_MULTIPLE";
+        case CURAND_STATUS_DOUBLE_PRECISION_REQUIRED: return "CURAND_STATUS_DOUBLE_PRECISION_REQUIRED";
+        case CURAND_STATUS_LAUNCH_FAILURE: return "CURAND_STATUS_LAUNCH_FAILURE";
+        case CURAND_STATUS_PREEXISTING_FAILURE: return "CURAND_STATUS_PREEXISTING_FAILURE";
+        case CURAND_STATUS_INITIALIZATION_FAILED: return "CURAND_STATUS_INITIALIZATION_FAILED";
+        case CURAND_STATUS_ARCH_MISMATCH: return "CURAND_STATUS_ARCH_MISMATCH";
+        case CURAND_STATUS_INTERNAL_ERROR: return "CURAND_STATUS_INTERNAL_ERROR";
+    }
+    return "unknown error";
+}
+inline void curandAssert(curandStatus_t code, char *file, int line, bool abort=true) {
+   if (code != CURAND_STATUS_SUCCESS) {
+    fprintf(stderr,"CUDAassert: %s %s %d\n", curandGetErrorString(code), file, line);
+    if (abort) exit(code);
+   }
+}
 
 
 #define PRINT_ARR(LATICE, SIZE) do {           \
@@ -136,19 +151,19 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
     ((end-start) * rand) + start;              \
 })
 
-#define SETUP_PRNG ({                               \
-    CUDA_CALL(cudaMalloc(                           \
-        (void **)&devMTGPStates,                    \
-        PRNG_STATES * sizeof(curandStateMtgp32)     \
-    ));                                             \
-    CUDA_CALL(cudaMalloc(                           \
-        (void**)&devKernelParams,                   \
-        sizeof(mtgp32_kernel_params)                \
-    ));                                             \
-    CURAND_CALL(curandMakeMTGP32Constants(          \
-        mtgp32dc_params_fast_11213,                 \
-        devKernelParams                             \
-    ));                                             \
+#define SETUP_PRNG ({                          \
+    CUDA_CALL(cudaMalloc(                      \
+        (void **)&devMTGPStates,               \
+        PRNG_STATES * sizeof(curandStateMtgp32)\
+    ));                                        \
+    CUDA_CALL(cudaMalloc(                      \
+        (void**)&devKernelParams,              \
+        sizeof(mtgp32_kernel_params)           \
+    ));                                        \
+    CURAND_CALL(curandMakeMTGP32Constants(     \
+        mtgp32dc_params_fast_11213,            \
+        devKernelParams                        \
+    ));                                        \
     for(int states=0; states<PRNG_STATES; states+=MAX_RNG_STATES){ \
         CURAND_CALL(curandMakeMTGP32KernelState(   \
             devMTGPStates + states,                \
@@ -160,23 +175,35 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
     }                                              \
 })
 
-
 // // [x,y,z] = [miu, sigma, w0] = [blockIdx.x, blockIdx.y, threadIdx.x]
 #define X blockIdx.x
 #define Y blockIdx.y
 #define Z threadIdx.x
-#define MAX_X MIU_SIZE
-#define MAX_Y SIGMA_SIZE
+#define MAX_X gridDim.x
+#define MAX_Y gridDim.y
+#define MAX_Z blockDim.x
 
 // // https://coderwall.com/p/fzni3g
 #define THREAD_ID ({                        \
     X + Y * MAX_X + Z * MAX_X * MAX_Y;      \
 })
 
+#define DISPLAY_MC_RESULTS ({                               \
+    printf("C_MEAN   C_SIGMA  W_0      RHO      MCS\n");    \
+    for (int i = 0; i < THREADS_NEEDED; i++){               \
+        int x = (int)(i % MAX_X);                           \
+        int y = (int)(( i / MAX_X ) % MAX_Y);               \
+        int z = (int)(i / ( MAX_X * MAX_Y ));               \
+        printf(                                             \
+            "%.6f %.6f %.6f %.6f %d\n",                     \
+            x/(float)MAX_X, y/(float)MAX_Y, z/(float)MAX_Z, \
+            HST_BOND_DENSITY[i], HST_MCS_NEEDED[i]          \
+        );                                                  \
+    }                                                       \
+})
+
 #define THREAD_LATICE_INDEX ({                 \
-    X * LATICE_SIZE                             \
-    + Y * MAX_X * LATICE_SIZE                   \
-    + Z * MAX_X * MAX_Y *LATICE_SIZE;           \
+    0;          \
 }) 
 
 #define BLOCK_ID ({                            \
@@ -192,18 +219,16 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
 
 __global__ void generate_kernel(
     curandStateMtgp32 *state,
-    short * LATICE, 
-    short * NEXT_STEP_LATICE,
     int * DEV_MCS_NEEDED,
     float * DEV_BOND_DENSITY
 ) {
     // @todo change short to char ?
     // sizeof(GRID) = (32,32,1) | sizeof(BLOCK) = (32,1,1) | sizeof(LATICES) = (32^3, 60)
     // [GRIDX, GRIDY, BLOCKX] -> [tid]
-    // short LATICE_1[LATICE_SIZE];
-    // short LATICE_2[LATICE_SIZE];
-    // short * LATICE           = LATICE_1;
-    // short * NEXT_STEP_LATICE = LATICE_2;
+    short LATICE_1[LATICE_SIZE];
+    short LATICE_2[LATICE_SIZE];
+    short * LATICE           = LATICE_1;
+    short * NEXT_STEP_LATICE = LATICE_2;
     short * SWAP                = NULL;
 
     long  latice_update_counter = 0;
@@ -220,8 +245,8 @@ __global__ void generate_kernel(
             // If latice is in ferromagnetic state, simulation can stop
             break;
         }
-        float C = TRIANGLE_DISTRIBUTION(X * STEP_SIZE, Y * STEP_SIZE); // miu, sigma
-        float W0 = Z * STEP_SIZE;
+        float C = TRIANGLE_DISTRIBUTION((X / (float)MAX_X), (Y / (float)MAX_Y));
+        float W0 = Z / (float)MAX_Z;
         first_i = (int)(LATICE_SIZE * curand_uniform(&state[BLOCK_ID])) + THREAD_LATICE_INDEX;
         last_i  = (int)(first_i + (C * LATICE_SIZE)) + THREAD_LATICE_INDEX;
         is_latice_updated = FALSE; // ?
@@ -252,26 +277,22 @@ __global__ void generate_kernel(
 }
 
 clock_t begin, end;
-static double time_spent;
 
 int main(int argc, char *argv[])    
 {
 
-
-
     // Blocks iterate over W0; Grid iterates over MIU and SIGMA
     const int THREADS_NEEDED = MIU_SIZE * SIGMA_SIZE * W0_SIZE; // 10^3
 
-    dim3 block_size(W0_SIZE,1,1);
-    dim3 grid_size(MIU_SIZE,SIGMA_SIZE,1);
+    dim3 blockDim(W0_SIZE,1,1);
+    dim3 gridDim(MIU_SIZE,SIGMA_SIZE,1);
 
     // Maximum 256 threads per state
     // A given state may not be used by more than one block
-    // @todo: upgrade for block_size > 256 threads ?
-    const long PRNG_STATES    = grid_size.x*grid_size.y*grid_size.z;
+    // @todo: upgrade for blockDim > 256 threads ?
+    const long PRNG_STATES    = gridDim.x*gridDim.y*gridDim.z;
     long PRNG_SEED      = time (NULL) * getpid();
-
-    
+  
     int AVERAGES       = 1;
     
     // Setup configurables
@@ -287,16 +308,6 @@ int main(int argc, char *argv[])
 
     SETUP_PRNG; // setup devMTGPStates basing on devKernelParams, PRNG_STATES, PRNG_SEED
 
-    short * DEV_LATICES;
-    short * DEV_NEXT_STEP_LATICES;
-    CUDA_CALL(cudaMalloc(                      
-        &DEV_LATICES,               
-        THREADS_NEEDED * sizeof(short) * LATICE_SIZE
-    )); 
-    CUDA_CALL(cudaMalloc(                      
-        &DEV_NEXT_STEP_LATICES,               
-        THREADS_NEEDED * sizeof(short) * LATICE_SIZE
-    ));
     // @todo static memory allocation?
     int * DEV_MCS_NEEDED; float * DEV_BOND_DENSITY;
     int * HST_MCS_NEEDED; float * HST_BOND_DENSITY;
@@ -313,10 +324,8 @@ int main(int argc, char *argv[])
     for (int avgs = 0; avgs < AVERAGES; avgs++) {
         begin = clock();
 
-        generate_kernel<<<grid_size, block_size>>>(
+        generate_kernel<<<gridDim, blockDim>>>(
             devMTGPStates,
-            DEV_LATICES, 
-            DEV_NEXT_STEP_LATICES,
             DEV_MCS_NEEDED,
             DEV_BOND_DENSITY
         );
@@ -337,24 +346,16 @@ int main(int argc, char *argv[])
 
         end = clock();
 
-        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+        static double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
         // printf("CPU time: %lf s - seed: %ld\n", time_spent, PRNG_SEED);
-        int BLCK_SIZE = block_size.x*block_size.y*block_size.z;
-        int GRID_SIZE = grid_size.x*grid_size.y*grid_size.z;
+        int BLCK_SIZE = blockDim.x*blockDim.y*blockDim.z;
+        int GRID_SIZE = gridDim.x*gridDim.y*gridDim.z;
         printf("%d\t%d\t%d\t%d\t%lf\n", LATICE_SIZE, MAX_MCS, BLCK_SIZE, GRID_SIZE, time_spent);
-        /* printf("C_MEAN   C_SIGMA  W_0      RHO      MCS\n");
-        // for (int i = 0; i < THREADS_NEEDED; i++){
-        //     int x = (int)(i % MAX_X);
-        //     int y = (int)(( i / MAX_X ) % MAX_Y);
-        //     int z = (int)(i / ( MAX_X * MAX_Y ));
-        //     printf("%.6f %.6f %.6f %.6f %d\n", x*STEP_SIZE, y*STEP_SIZE, z*STEP_SIZE, HST_BOND_DENSITY[i], HST_MCS_NEEDED[i]);
-        // } */
+        DISPLAY_MC_RESULTS;
     }
 
     /* Cleanup */
     CUDA_CALL(cudaFree(devMTGPStates));
-    CUDA_CALL(cudaFree(DEV_LATICES));
-    CUDA_CALL(cudaFree(DEV_NEXT_STEP_LATICES));
     CUDA_CALL(cudaFree(DEV_MCS_NEEDED));
     CUDA_CALL(cudaFree(DEV_BOND_DENSITY));
     free(HST_MCS_NEEDED);
