@@ -29,23 +29,26 @@
 
 #define FLIP_SPIN(s) ((s) == (0) ? (1) : (0))
 
-#define LATICE_SIZE 60
-#define MAX_MCS     1000
+#define LATICE_SIZE 64
 #define MAX_RNG_STATES 200
 
-#define STEP_SIZE   0.1
+#define MAX_MCS     10000
+#define W0_START    0.0 
+#define W0_END      1.0 
+#define W0_SIZE     10  
+#define MIU_START   0.0 
+#define MIU_END     1.0 
+#define MIU_SIZE    20 
+#define SIGMA_START 0.0 
+#define SIGMA_END   1.0 
+#define SIGMA_SIZE  20
 
-#define W0_START    0.0
-#define W0_END      1.0
-#define W0_SIZE     (int)(((W0_END-W0_START)/STEP_SIZE)+1)
-
-#define MIU_START   0.0
-#define MIU_END     1.0
-#define MIU_SIZE    (int)(((MIU_END-MIU_START)/STEP_SIZE)+1)
-
-#define SIGMA_START 0.0
-#define SIGMA_END   1.0
-#define SIGMA_SIZE  (int)(((SIGMA_END-SIGMA_START)/STEP_SIZE)+1)
+#define X blockIdx.x
+#define Y blockIdx.y
+#define Z blockIdx.z
+#define MAX_X MIU_SIZE
+#define MAX_Y SIGMA_SIZE
+#define MAX_Z W0_SIZE
 
 
 // #define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
@@ -220,8 +223,8 @@ __global__ void generate_kernel(
             // If latice is in ferromagnetic state, simulation can stop
             break;
         }
-        float C = TRIANGLE_DISTRIBUTION(X * STEP_SIZE, Y * STEP_SIZE); // miu, sigma
-        float W0 = Z * STEP_SIZE;
+        float C = TRIANGLE_DISTRIBUTION((X / (float)MAX_X), (Y / (float)MAX_Y));
+        float W0 = Z/(float)MAX_Z;
         first_i = (int)(LATICE_SIZE * curand_uniform(&state[BLOCK_ID])) + THREAD_LATICE_INDEX;
         last_i  = (int)(first_i + (C * LATICE_SIZE)) + THREAD_LATICE_INDEX;
         is_latice_updated = FALSE; // ?

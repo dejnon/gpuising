@@ -29,21 +29,19 @@
 
 #define FLIP_SPIN(s) ((s) == (0) ? (1) : (0))
 
-#define LATICE_SIZE 60
-#define MAX_MCS     100000
+#define LATICE_SIZE 64
 #define MAX_RNG_STATES 200
 
-#define W0_START    0.0
-#define W0_END      1.0
-#define W0_SIZE     11
-
-#define MIU_START   0.0
-#define MIU_END     1.0
-#define MIU_SIZE    11
-
-#define SIGMA_START 0.0
-#define SIGMA_END   1.0
-#define SIGMA_SIZE  11
+#define MAX_MCS     10000
+#define W0_START    0.0 
+#define W0_END      1.0 
+#define W0_SIZE     10  
+#define MIU_START   0.0 
+#define MIU_END     1.0 
+#define MIU_SIZE    20 
+#define SIGMA_START 0.0 
+#define SIGMA_END   1.0 
+#define SIGMA_SIZE  20
 
 #define X blockIdx.x
 #define Y blockIdx.y
